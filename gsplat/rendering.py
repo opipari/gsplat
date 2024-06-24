@@ -301,6 +301,7 @@ def rasterization(
         render_colors = []
         render_alphas = []
 
+        vis_bools = torch.zeros(means2d.shape[:2], dtype=torch.bool, device=means2d.device)
         for i in range(n_chunks):
             colors_chunk = colors[..., i * 32 : (i + 1) * 32]
             backgrounds_chunk = (
@@ -308,7 +309,7 @@ def rasterization(
                 if backgrounds is not None
                 else None
             )
-            render_colors_, render_alphas_ = rasterize_to_pixels(
+            render_colors_, render_alphas_, vis_bools_ = rasterize_to_pixels(
                 means2d,
                 conics,
                 colors_chunk,
@@ -324,10 +325,11 @@ def rasterization(
             )
             render_colors.append(render_colors_)
             render_alphas.append(render_alphas_)
+            vis_bools = vis_bools.logical_or(vis_bools_)
         render_colors = torch.cat(render_colors, dim=-1)
         render_alphas = render_alphas[0]  # discard the rest
     else:
-        render_colors, render_alphas = rasterize_to_pixels(
+        render_colors, render_alphas, vis_bools = rasterize_to_pixels(
             means2d,
             conics,
             colors,
@@ -341,6 +343,7 @@ def rasterization(
             packed=packed,
             absgrad=absgrad,
         )
+
     if render_mode in ["ED", "RGB+ED"]:
         # normalize the accumulated depth to get the expected depth
         render_colors = torch.cat(
@@ -368,6 +371,7 @@ def rasterization(
         "width": width,
         "height": height,
         "tile_size": tile_size,
+        "vis_bools": vis_bools,
     }
     return render_colors, render_alphas, meta
 
