@@ -529,8 +529,9 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
     float *__restrict__ render_colors, // [C, image_height, image_width, COLOR_DIM]
     float *__restrict__ render_alphas, // [C, image_height, image_width, 1]
-    int32_t *__restrict__ last_ids,     // [C, image_height, image_width]
-    bool *__restrict__ vis_bools   // [C, N] or [nnz]
+    int32_t *__restrict__ last_ids,    // [C, image_height, image_width]
+    int32_t *__restrict__ max_ids,     // [C, image_height, image_width]
+    bool *__restrict__ vis_bools       // [C, N] or [nnz]
 ) {
     // each thread draws one pixel, but also timeshares caching gaussians in a
     // shared tile
@@ -581,6 +582,10 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     float T = 1.0f;
     // index of most recent gaussian to write to this thread's pixel
     uint32_t cur_idx = 0;
+
+    // index of most visible gaussian to write to this thread's pixel
+    int32_t max_idx = -1;
+    float max_vis = 0.0f;
 
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing its
@@ -641,6 +646,10 @@ __global__ void rasterize_to_pixels_fwd_kernel(
                 pix_out[k] += c_ptr[k] * vis;
             }
             cur_idx = batch_start + t;
+            if (vis>max_vis) {
+                max_vis = vis;
+                max_idx = g;
+            }
 
             T = next_T;
         }
@@ -660,10 +669,12 @@ __global__ void rasterize_to_pixels_fwd_kernel(
         }
         // index in bin of last gaussian in this pixel
         last_ids[pix_id] = static_cast<int32_t>(cur_idx);
+        // index in bin of most visible gaussian in this pixel
+        max_ids[pix_id] = static_cast<int32_t>(max_idx);
     }
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_tensor(
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize_to_pixels_fwd_tensor(
     // Gaussian parameters
     const torch::Tensor &means2d,   // [C, N, 2] or [nnz, 2]
     const torch::Tensor &conics,    // [C, N, 3] or [nnz, 3]
@@ -706,6 +717,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize
                                         means2d.options().dtype(torch::kFloat32));
     torch::Tensor last_ids = torch::empty({C, image_height, image_width},
                                           means2d.options().dtype(torch::kInt32));
+    torch::Tensor max_ids = torch::full({C, image_height, image_width}, /*value=*/-1,
+                                          means2d.options().dtype(torch::kInt32));
     torch::Tensor vis_bools = torch::zeros({C, N}, means2d.options().dtype(
                                             torch::kBool));
 
@@ -733,7 +746,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>(),
-            vis_bools.data_ptr<bool>());
+            max_ids.data_ptr<int32_t>(), vis_bools.data_ptr<bool>());
         break;
     case 2:
         if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<2>,
@@ -751,7 +764,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>(),
-            vis_bools.data_ptr<bool>());
+            max_ids.data_ptr<int32_t>(), vis_bools.data_ptr<bool>());
         break;
     case 3:
         if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<3>,
@@ -769,7 +782,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>(),
-            vis_bools.data_ptr<bool>());
+            max_ids.data_ptr<int32_t>(), vis_bools.data_ptr<bool>());
         break;
     case 4:
         if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<4>,
@@ -787,7 +800,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>(),
-            vis_bools.data_ptr<bool>());
+            max_ids.data_ptr<int32_t>(), vis_bools.data_ptr<bool>());
         break;
     case 5:
         if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<5>,
@@ -805,7 +818,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>(),
-            vis_bools.data_ptr<bool>());
+            max_ids.data_ptr<int32_t>(), vis_bools.data_ptr<bool>());
         break;
     case 8:
         if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<8>,
@@ -823,7 +836,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>(),
-            vis_bools.data_ptr<bool>());
+            max_ids.data_ptr<int32_t>(), vis_bools.data_ptr<bool>());
         break;
     case 9:
         if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<9>,
@@ -841,7 +854,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>(),
-            vis_bools.data_ptr<bool>());
+            max_ids.data_ptr<int32_t>(), vis_bools.data_ptr<bool>());
         break;
     case 16:
         if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<16>,
@@ -859,7 +872,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>(),
-            vis_bools.data_ptr<bool>());
+            max_ids.data_ptr<int32_t>(), vis_bools.data_ptr<bool>());
         break;
     case 17:
         if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<17>,
@@ -877,7 +890,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>(),
-            vis_bools.data_ptr<bool>());
+            max_ids.data_ptr<int32_t>(), vis_bools.data_ptr<bool>());
         break;
     case 32:
         if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<32>,
@@ -895,7 +908,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>(),
-            vis_bools.data_ptr<bool>());
+            max_ids.data_ptr<int32_t>(), vis_bools.data_ptr<bool>());
         break;
     case 33:
         if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<33>,
@@ -913,7 +926,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>(),
-            vis_bools.data_ptr<bool>());
+            max_ids.data_ptr<int32_t>(), vis_bools.data_ptr<bool>());
         break;
     case 64:
         if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<64>,
@@ -931,7 +944,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>(),
-            vis_bools.data_ptr<bool>());
+            max_ids.data_ptr<int32_t>(), vis_bools.data_ptr<bool>());
         break;
     case 65:
         if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<65>,
@@ -949,7 +962,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>(),
-            vis_bools.data_ptr<bool>());
+            max_ids.data_ptr<int32_t>(), vis_bools.data_ptr<bool>());
         break;
     case 128:
         if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<128>,
@@ -967,7 +980,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>(),
-            vis_bools.data_ptr<bool>());
+            max_ids.data_ptr<int32_t>(), vis_bools.data_ptr<bool>());
         break;
     case 129:
         if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<129>,
@@ -985,7 +998,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>(),
-            vis_bools.data_ptr<bool>());
+            max_ids.data_ptr<int32_t>(), vis_bools.data_ptr<bool>());
         break;
     case 256:
         if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<256>,
@@ -1003,7 +1016,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>(),
-            vis_bools.data_ptr<bool>());
+            max_ids.data_ptr<int32_t>(), vis_bools.data_ptr<bool>());
         break;
     case 257:
         if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<257>,
@@ -1021,7 +1034,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>(),
-            vis_bools.data_ptr<bool>());
+            max_ids.data_ptr<int32_t>(), vis_bools.data_ptr<bool>());
         break;
     case 512:
         if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<512>,
@@ -1039,7 +1052,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>(),
-            vis_bools.data_ptr<bool>());
+            max_ids.data_ptr<int32_t>(), vis_bools.data_ptr<bool>());
         break;
     case 513:
         if (cudaFuncSetAttribute(rasterize_to_pixels_fwd_kernel<513>,
@@ -1057,12 +1070,12 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize
             tile_offsets.data_ptr<int32_t>(), flatten_ids.data_ptr<int32_t>(),
             renders.data_ptr<float>(), alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>(),
-            vis_bools.data_ptr<bool>());
+            max_ids.data_ptr<int32_t>(), vis_bools.data_ptr<bool>());
         break;
     default:
         AT_ERROR("Unsupported number of channels: ", channels);
     }
-    return std::make_tuple(renders, alphas, last_ids, vis_bools);
+    return std::make_tuple(renders, alphas, last_ids, max_ids, vis_bools);
 }
 
 template <uint32_t COLOR_DIM>

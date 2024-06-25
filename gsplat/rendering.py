@@ -333,7 +333,7 @@ def rasterization(
                 if backgrounds is not None
                 else None
             )
-            render_colors_, render_alphas_, vis_bools_ = rasterize_to_pixels(
+            render_colors_, render_alphas_, max_ids_, vis_bools_ = rasterize_to_pixels(
                 means2d,
                 conics,
                 colors_chunk,
@@ -349,11 +349,13 @@ def rasterization(
             )
             render_colors.append(render_colors_)
             render_alphas.append(render_alphas_)
+            max_ids.append(max_ids_)
             vis_bools = vis_bools.logical_or(vis_bools_)
         render_colors = torch.cat(render_colors, dim=-1)
         render_alphas = render_alphas[0]  # discard the rest
+        max_ids = max_ids[0] # discard the rest
     else:
-        render_colors, render_alphas, vis_bools = rasterize_to_pixels(
+        render_colors, render_alphas, max_ids, vis_bools = rasterize_to_pixels(
             means2d,
             conics,
             colors,
@@ -395,6 +397,7 @@ def rasterization(
         "width": width,
         "height": height,
         "tile_size": tile_size,
+        "max_ids": max_ids,
         "vis_bools": vis_bools,
     }
     return render_colors, render_alphas, meta
