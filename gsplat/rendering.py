@@ -324,7 +324,7 @@ def rasterization(
     if colors.shape[-1] > channel_chunk:
         # slice into chunks
         n_chunks = (colors.shape[-1] + channel_chunk - 1) // channel_chunk
-        render_colors, render_alphas = [], []
+        render_colors, render_alphas, max_ids = [], [], []
         vis_bools = torch.zeros(means2d.shape[:2], dtype=torch.bool, device=means2d.device)
         for i in range(n_chunks):
             colors_chunk = colors[..., i * channel_chunk : (i + 1) * channel_chunk]
