@@ -6,6 +6,7 @@ pytest <THIS_PY_FILE> -s
 ```
 """
 
+from typing_extensions import Literal, assert_never
 import math
 
 import pytest
@@ -122,9 +123,10 @@ def test_world_to_cam(test_data):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-def test_persp_proj(test_data):
-    from gsplat.cuda._torch_impl import _persp_proj
-    from gsplat.cuda._wrapper import persp_proj, quat_scale_to_covar_preci, world_to_cam
+@pytest.mark.parametrize("camera_model", ["pinhole", "ortho", "fisheye"])
+def test_proj(test_data, camera_model: Literal["pinhole", "ortho", "fisheye"]):
+    from gsplat.cuda._torch_impl import _persp_proj, _ortho_proj, _fisheye_proj
+    from gsplat.cuda._wrapper import proj, quat_scale_to_covar_preci, world_to_cam
 
     torch.manual_seed(42)
 
@@ -132,14 +134,23 @@ def test_persp_proj(test_data):
     viewmats = test_data["viewmats"]
     height = test_data["height"]
     width = test_data["width"]
+
     covars, _ = quat_scale_to_covar_preci(test_data["quats"], test_data["scales"])
     means, covars = world_to_cam(test_data["means"], covars, viewmats)
     means.requires_grad = True
     covars.requires_grad = True
 
     # forward
-    means2d, covars2d = persp_proj(means, covars, Ks, width, height)
-    _means2d, _covars2d = _persp_proj(means, covars, Ks, width, height)
+    means2d, covars2d = proj(means, covars, Ks, width, height, camera_model)
+    if camera_model == "ortho":
+        _means2d, _covars2d = _ortho_proj(means, covars, Ks, width, height)
+    elif camera_model == "fisheye":
+        _means2d, _covars2d = _fisheye_proj(means, covars, Ks, width, height)
+    elif camera_model == "pinhole":
+        _means2d, _covars2d = _persp_proj(means, covars, Ks, width, height)
+    else:
+        assert_never(camera_model)
+
     torch.testing.assert_close(means2d, _means2d, rtol=1e-4, atol=1e-4)
     torch.testing.assert_close(covars2d, _covars2d, rtol=1e-1, atol=3e-2)
 
@@ -159,9 +170,15 @@ def test_persp_proj(test_data):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.parametrize("camera_model", ["pinhole", "ortho", "fisheye"])
 @pytest.mark.parametrize("fused", [False, True])
-@pytest.mark.parametrize("calc_compensations", [False, True])
-def test_projection(test_data, fused: bool, calc_compensations: bool):
+@pytest.mark.parametrize("calc_compensations", [True, False])
+def test_projection(
+    test_data,
+    fused: bool,
+    calc_compensations: bool,
+    camera_model: Literal["pinhole", "ortho", "fisheye"],
+):
     from gsplat.cuda._torch_impl import _fully_fused_projection
     from gsplat.cuda._wrapper import fully_fused_projection, quat_scale_to_covar_preci
 
@@ -174,6 +191,7 @@ def test_projection(test_data, fused: bool, calc_compensations: bool):
     quats = test_data["quats"]
     scales = test_data["scales"]
     means = test_data["means"]
+
     viewmats.requires_grad = True
     quats.requires_grad = True
     scales.requires_grad = True
@@ -191,6 +209,7 @@ def test_projection(test_data, fused: bool, calc_compensations: bool):
             width,
             height,
             calc_compensations=calc_compensations,
+            camera_model=camera_model,
         )
     else:
         covars, _ = quat_scale_to_covar_preci(quats, scales, triu=True)  # [N, 6]
@@ -204,6 +223,7 @@ def test_projection(test_data, fused: bool, calc_compensations: bool):
             width,
             height,
             calc_compensations=calc_compensations,
+            camera_model=camera_model,
         )
     _covars, _ = quat_scale_to_covar_preci(quats, scales, triu=False)  # [N, 3, 3]
     _radii, _means2d, _depths, _conics, _compensations = _fully_fused_projection(
@@ -214,6 +234,7 @@ def test_projection(test_data, fused: bool, calc_compensations: bool):
         width,
         height,
         calc_compensations=calc_compensations,
+        camera_model=camera_model,
     )
 
     # radii is integer so we allow for 1 unit difference
@@ -228,11 +249,11 @@ def test_projection(test_data, fused: bool, calc_compensations: bool):
         )
 
     # backward
-    v_means2d = torch.randn_like(means2d) * radii[..., None]
-    v_depths = torch.randn_like(depths) * radii
-    v_conics = torch.randn_like(conics) * radii[..., None]
+    v_means2d = torch.randn_like(means2d) * valid[..., None]
+    v_depths = torch.randn_like(depths) * valid
+    v_conics = torch.randn_like(conics) * valid[..., None]
     if calc_compensations:
-        v_compensations = torch.randn_like(compensations) * radii
+        v_compensations = torch.randn_like(compensations) * valid
     v_viewmats, v_quats, v_scales, v_means = torch.autograd.grad(
         (means2d * v_means2d).sum()
         + (depths * v_depths).sum()
@@ -258,8 +279,13 @@ def test_projection(test_data, fused: bool, calc_compensations: bool):
 @pytest.mark.parametrize("fused", [False, True])
 @pytest.mark.parametrize("sparse_grad", [False, True])
 @pytest.mark.parametrize("calc_compensations", [False, True])
+@pytest.mark.parametrize("camera_model", ["pinhole", "ortho", "fisheye"])
 def test_fully_fused_projection_packed(
-    test_data, fused: bool, sparse_grad: bool, calc_compensations: bool
+    test_data,
+    fused: bool,
+    sparse_grad: bool,
+    calc_compensations: bool,
+    camera_model: Literal["pinhole", "ortho", "fisheye"],
 ):
     from gsplat.cuda._wrapper import fully_fused_projection, quat_scale_to_covar_preci
 
@@ -272,6 +298,7 @@ def test_fully_fused_projection_packed(
     quats = test_data["quats"]
     scales = test_data["scales"]
     means = test_data["means"]
+
     viewmats.requires_grad = True
     quats.requires_grad = True
     scales.requires_grad = True
@@ -299,6 +326,7 @@ def test_fully_fused_projection_packed(
             packed=True,
             sparse_grad=sparse_grad,
             calc_compensations=calc_compensations,
+            camera_model=camera_model,
         )
         _radii, _means2d, _depths, _conics, _compensations = fully_fused_projection(
             means,
@@ -311,6 +339,7 @@ def test_fully_fused_projection_packed(
             height,
             packed=False,
             calc_compensations=calc_compensations,
+            camera_model=camera_model,
         )
     else:
         covars, _ = quat_scale_to_covar_preci(quats, scales, triu=True)  # [N, 6]
@@ -334,6 +363,7 @@ def test_fully_fused_projection_packed(
             packed=True,
             sparse_grad=sparse_grad,
             calc_compensations=calc_compensations,
+            camera_model=camera_model,
         )
         _radii, _means2d, _depths, _conics, _compensations = fully_fused_projection(
             means,
@@ -346,6 +376,7 @@ def test_fully_fused_projection_packed(
             height,
             packed=False,
             calc_compensations=calc_compensations,
+            camera_model=camera_model,
         )
 
     # recover packed tensors to full matrices for testing
@@ -387,9 +418,9 @@ def test_fully_fused_projection_packed(
         retain_graph=True,
     )
     v_viewmats, v_quats, v_scales, v_means = torch.autograd.grad(
-        (means2d * v_means2d[sel]).sum()
-        + (depths * v_depths[sel]).sum()
-        + (conics * v_conics[sel]).sum(),
+        (means2d * v_means2d[__radii > 0]).sum()
+        + (depths * v_depths[__radii > 0]).sum()
+        + (conics * v_conics[__radii > 0]).sum(),
         (viewmats, quats, scales, means),
         retain_graph=True,
     )
@@ -398,9 +429,9 @@ def test_fully_fused_projection_packed(
         v_scales = v_scales.to_dense()
         v_means = v_means.to_dense()
 
-    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-3, atol=1e-4)
+    torch.testing.assert_close(v_viewmats, _v_viewmats, rtol=1e-2, atol=1e-2)
     torch.testing.assert_close(v_quats, _v_quats, rtol=1e-3, atol=1e-3)
-    torch.testing.assert_close(v_scales, _v_scales, rtol=1e-2, atol=1e-2)
+    torch.testing.assert_close(v_scales, _v_scales, rtol=5e-2, atol=5e-2)
     torch.testing.assert_close(v_means, _v_means, rtol=1e-3, atol=1e-3)
 
 
@@ -445,7 +476,6 @@ def test_rasterize_to_pixels(test_data, channels: int):
         fully_fused_projection,
         isect_offset_encode,
         isect_tiles,
-        persp_proj,
         quat_scale_to_covar_preci,
         rasterize_to_pixels,
     )

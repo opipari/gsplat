@@ -1,6 +1,7 @@
 import glob
 import os
 import os.path as osp
+import pathlib
 import platform
 import sys
 
@@ -14,24 +15,24 @@ URL = "https://github.com/nerfstudio-project/gsplat"
 BUILD_NO_CUDA = os.getenv("BUILD_NO_CUDA", "0") == "1"
 WITH_SYMBOLS = os.getenv("WITH_SYMBOLS", "0") == "1"
 LINE_INFO = os.getenv("LINE_INFO", "0") == "1"
+MAX_JOBS = os.getenv("MAX_JOBS")
+need_to_unset_max_jobs = False
+if not MAX_JOBS:
+    need_to_unset_max_jobs = True
+    os.environ["MAX_JOBS"] = "10"
+    print(f"Setting MAX_JOBS to {os.environ['MAX_JOBS']}")
 
 
 def get_ext():
     from torch.utils.cpp_extension import BuildExtension
 
-    return BuildExtension.with_options(no_python_abi_suffix=True, use_ninja=False)
+    return BuildExtension.with_options(no_python_abi_suffix=True, use_ninja=True)
 
 
 def get_extensions():
     import torch
     from torch.__config__ import parallel_info
     from torch.utils.cpp_extension import CUDAExtension
-
-    extensions_dir_v1 = osp.join("gsplat", "cuda_legacy", "csrc")
-    sources_v1 = glob.glob(osp.join(extensions_dir_v1, "*.cu")) + glob.glob(
-        osp.join(extensions_dir_v1, "*.cpp")
-    )
-    sources_v1 = [path for path in sources_v1 if "hip" not in path]
 
     extensions_dir_v2 = osp.join("gsplat", "cuda", "csrc")
     sources_v2 = glob.glob(osp.join(extensions_dir_v2, "*.cu")) + glob.glob(
@@ -81,30 +82,26 @@ def get_extensions():
         undef_macros += ["__HIP_NO_HALF_CONVERSIONS__"]
     else:
         nvcc_flags += ["--expt-relaxed-constexpr"]
+
+    # GLM/Torch has spammy and very annoyingly verbose warnings that this suppresses
+    nvcc_flags += ["-diag-suppress", "20012,186"]
     extra_compile_args["nvcc"] = nvcc_flags
     if sys.platform == "win32":
         extra_compile_args["nvcc"] += ["-DWIN32_LEAN_AND_MEAN"]
 
-    extension_v1 = CUDAExtension(
-        f"gsplat.csrc_legacy",
-        sources_v1,
-        include_dirs=[extensions_dir_v2],  # glm lives in v2.
-        define_macros=define_macros,
-        undef_macros=undef_macros,
-        extra_compile_args=extra_compile_args,
-        extra_link_args=extra_link_args,
-    )
+    current_dir = pathlib.Path(__file__).parent.resolve()
+    glm_path = os.path.join(current_dir, "gsplat", "cuda", "csrc", "third_party", "glm")
     extension_v2 = CUDAExtension(
-        f"gsplat.csrc",
+        "gsplat.csrc",
         sources_v2,
-        include_dirs=[extensions_dir_v2],  # glm lives in v2.
+        include_dirs=[extensions_dir_v2, glm_path],  # glm lives in v2.
         define_macros=define_macros,
         undef_macros=undef_macros,
         extra_compile_args=extra_compile_args,
         extra_link_args=extra_link_args,
     )
 
-    return [extension_v1, extension_v2]
+    return [extension_v2]
 
 
 setup(
@@ -143,3 +140,7 @@ setup(
     # https://github.com/pypa/setuptools/issues/1461#issuecomment-954725244
     include_package_data=True,
 )
+
+if need_to_unset_max_jobs:
+    print("Unsetting MAX_JOBS")
+    os.environ.pop("MAX_JOBS")

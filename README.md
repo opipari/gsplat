@@ -15,37 +15,42 @@ gsplat is an open-source library for CUDA accelerated rasterization of gaussians
 
 **Dependence**: Please install [Pytorch](https://pytorch.org/get-started/locally/) first.
 
-
-
-
 The easiest way is to install from PyPI. In this way it will build the CUDA code **on the first run** (JIT).
 
 ```bash
 pip install gsplat
 ```
 
-Or install from source. In this way it will build the CUDA code during installation.
+Alternatively you can install gsplat from source. In this way it will build the CUDA code during installation.
 
 ```bash
 pip install git+https://github.com/nerfstudio-project/gsplat.git
 ```
 
-To install gsplat on Windows, please check [this instruction](docs/INSTALL_WIN.md).
+We also provide [pre-compiled wheels](https://docs.gsplat.studio/whl) for both linux and windows on certain python-torch-CUDA combinations (please check first which versions are supported). Note this way you would have to manually install [gsplat's dependencies](https://github.com/nerfstudio-project/gsplat/blob/6022cf45a19ee307803aaf1f19d407befad2a033/setup.py#L115). For example, to install gsplat for pytorch 2.0 and cuda 11.8 you can run
+```
+pip install ninja numpy jaxtyping rich
+pip install gsplat --index-url https://docs.gsplat.studio/whl/pt20cu118
+```
+
+To build gsplat from source on Windows, please check [this instruction](docs/INSTALL_WIN.md).
 
 ## Evaluation
 
 This repo comes with a standalone script that reproduces the official Gaussian Splatting with exactly the same performance on PSNR, SSIM, LPIPS, and converged number of Gaussians. Powered by gsplat’s efficient CUDA implementation, the training takes up to **4x less GPU memory** with up to **15% less time** to finish than the official implementation. Full report can be found [here](https://docs.gsplat.studio/main/tests/eval.html).
 
 ```bash
-# under examples/
-pip install -r requirements.txt
-bash benchmark.sh
+pip install -r examples/requirements.txt
+# download mipnerf_360 benchmark data
+python examples/datasets/download_dataset.py
+# run batch evaluation
+bash examples/benchmarks/basic.sh
 ```
 
 ## Examples
 
 We provide a set of examples to get you started! Below you can find the details about
-the examples (requires to install some exta dependences via `pip install -r examples/requirements.txt`)
+the examples (requires to install some exta dependencies via `pip install -r examples/requirements.txt`)
 
 - [Train a 3D Gaussian splatting model on a COLMAP capture.](https://docs.gsplat.studio/main/examples/colmap.html)
 - [Fit a 2D image with 3D Gaussians.](https://docs.gsplat.studio/main/examples/image.html)
@@ -68,16 +73,18 @@ This project is developed by the following wonderful contributors (unordered):
 - [Zhuoyang Pan](https://panzhy.com/) (ShanghaiTech University): Core developer.
 - [Jianbo Ye](http://www.jianboye.org/) (Amazon): Core developer.
 
-We also have made the mathematical supplement, with conventions and derivations, available [here](https://arxiv.org/abs/2312.02121). If you find this library useful in your projects or papers, please consider citing:
+We also have a white paper with about the project with benchmarking and mathematical supplement with conventions and derivations, available [here](https://arxiv.org/abs/2409.06765). If you find this library useful in your projects or papers, please consider citing:
 
 ```
-@misc{ye2023mathematical,
-    title={Mathematical Supplement for the $\texttt{gsplat}$ Library}, 
-    author={Vickie Ye and Angjoo Kanazawa},
-    year={2023},
-    eprint={2312.02121},
+@article{ye2024gsplatopensourcelibrarygaussian,
+    title={gsplat: An Open-Source Library for {Gaussian} Splatting}, 
+    author={Vickie Ye and Ruilong Li and Justin Kerr and Matias Turkulainen and Brent Yi and Zhuoyang Pan and Otto Seiskari and Jianbo Ye and Jeffrey Hu and Matthew Tancik and Angjoo Kanazawa},
+    year={2024},
+    eprint={2409.06765},
+    journal={arXiv preprint arXiv:2409.06765},
     archivePrefix={arXiv},
-    primaryClass={cs.MS}
+    primaryClass={cs.CV},
+    url={https://arxiv.org/abs/2409.06765}, 
 }
 ```
 
